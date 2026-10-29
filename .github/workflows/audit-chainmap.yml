@@ -50,7 +50,7 @@ jobs:
           source="$SANDBOX/source"
           build="$SANDBOX/build"
           summary="$GITHUB_STEP_SUMMARY"
-          printf '# Exact ChainMap validation\n\nBaseline `%s`; fixed `%s`.\n\n' "$BASE_COMMIT" "$FIX_COMMIT" >> "$summary"
+          printf '# Exact ChainMap validation\n\nBaseline %s; fixed %s.\n\n' "$BASE_COMMIT" "$FIX_COMMIT" >> "$summary"
           [ "$(git -C "$source" rev-parse HEAD)" = "$FIX_COMMIT" ]
           [ -z "$(git -C "$source" status --porcelain)" ]
           git -C "$source" merge-base --is-ancestor "$BASE_COMMIT" "$FIX_COMMIT"
@@ -90,14 +90,17 @@ jobs:
               cases = {case.get('name'): case for case in root.iter('testcase')}
               skips = len(root.findall('.//testcase/skipped'))
               counts = Counter(name.split('.')[1] for name in cases if name and name.startswith('test.') and len(name.split('.')) > 1)
+              expected = {f'test.test_collections.TestChainMap.test_reverse_union_with_{kind}' for kind in ('counter', 'defaultdict')}
               if label == 'baseline':
-                  expected = {f'test.test_collections.TestChainMap.test_reverse_union_with_{kind}' for kind in ('counter', 'defaultdict')}
                   valid = int(rc) == 2 and (tests, failures, errors) == (2, 2, 0) and expected <= cases.keys()
                   valid = valid and all(cases[name].find('failure') is not None and cases[name].find('failure').get('type') == 'AssertionError' for name in expected)
                   detail = ', '.join(sorted(expected)) if valid else 'baseline regression mismatch'
               else:
                   valid = int(rc) == 0 and tests > 0 and failures == errors == 0 and all(counts[name] > 0 for name in modules)
+                  valid = valid and expected <= cases.keys()
+                  valid = valid and all(not any(cases[name].find(tag) is not None for tag in ('skipped', 'failure', 'error')) for name in expected)
                   detail = ', '.join(f'{name}={counts[name]}' for name in modules)
+                  detail += '; both new regression tests present and passed' if valid else '; required evidence missing'
               print(f'| {label} | {rc} | {tests} | {failures} | {errors} | {skips} | {detail} |')
           except (OSError, ET.ParseError, KeyError, ValueError) as exc:
               print(f'| {label} | {rc} | unavailable | unavailable | unavailable | unavailable | {type(exc).__name__} |')
@@ -110,23 +113,23 @@ jobs:
           trap 'git -C "$source" restore --source "$FIX_COMMIT" -- Lib/collections/__init__.py' EXIT
           cp "$build/baseline-module.py" "$source/Lib/collections/__init__.py"
           if ./python "$build/repro.py" "$source" "$build/cpython" > "$build/red-repro.log" 2>&1; then rc=0; else rc=$?; fi
-          { printf 'Baseline repro exit: %s\n\n```text\n' "$rc"; cat "$build/red-repro.log"; printf '```\n\n'; } >> "$summary"
+          { printf 'Baseline repro exit: %s\n\n```text\n' "$rc"; cat "$build/red-repro.log"; printf '```\n\n'; } | tee -a "$summary"
           [ "$rc" -eq 1 ]
           grep -Fxq "AssertionError: expected union {'x': 0}, got {'x': 5}" "$build/red-repro.log"
           printf '| Run / seed | Exit | Tests | Failures | Errors | Skips | Details |\n| --- | --- | --- | --- | --- | --- | --- |\n' >> "$summary"
           if ./python -m test -j1 --timeout 600 --tempdir "$TMPDIR" --junit-xml "$build/red.xml" -m test.test_collections.TestChainMap.test_reverse_union_with_counter -m test.test_collections.TestChainMap.test_reverse_union_with_defaultdict test_collections > "$build/red.log" 2>&1; then rc=0; else rc=$?; fi
-          if ! python3 "$build/report.py" baseline "$build/red.xml" "$rc" >> "$summary"; then tail -n 100 "$build/red.log" >> "$summary"; exit 1; fi
+          if ! python3 "$build/report.py" baseline "$build/red.xml" "$rc" | tee -a "$summary"; then tail -n 100 "$build/red.log" | tee -a "$summary"; exit 1; fi
           git -C "$source" restore --source "$FIX_COMMIT" -- Lib/collections/__init__.py
           trap - EXIT
           [ -z "$(git -C "$source" status --porcelain)" ]
           if ./python "$build/repro.py" "$source" "$build/cpython" > "$build/green-repro.log" 2>&1; then rc=0; else rc=$?; fi
-          { printf '\nFixed repro exit: %s\n\n```text\n' "$rc"; cat "$build/green-repro.log"; printf '```\n\n'; } >> "$summary"
+          { printf '\nFixed repro exit: %s\n\n```text\n' "$rc"; cat "$build/green-repro.log"; printf '```\n\n'; } | tee -a "$summary"
           [ "$rc" -eq 0 ]
-          printf 'Each pass runs `./python -m test -j2 --timeout 600 --tempdir <sandbox>/build/tmp --junit-xml <sandbox>/build/pass-N.xml test_collections test_userdict test_userlist test_userstring test_numeric_tower` with `PYTHONHASHSEED=N`.\n\n' >> "$summary"
+          printf 'Each pass runs ./python -m test -j2 --timeout 600 --tempdir <sandbox>/build/tmp --junit-xml <sandbox>/build/pass-N.xml test_collections test_userdict test_userlist test_userstring test_numeric_tower with PYTHONHASHSEED=N.\n\n' >> "$summary"
           printf '| Run / seed | Exit | Tests | Failures | Errors | Skips | Details |\n| --- | --- | --- | --- | --- | --- | --- |\n' >> "$summary"
           for seed in $(seq 1 10); do
             if PYTHONHASHSEED="$seed" ./python -m test -j2 --timeout 600 --tempdir "$TMPDIR" --junit-xml "$build/pass-$seed.xml" test_collections test_userdict test_userlist test_userstring test_numeric_tower > "$build/pass-$seed.log" 2>&1; then rc=0; else rc=$?; fi
-            if ! python3 "$build/report.py" "$seed" "$build/pass-$seed.xml" "$rc" >> "$summary"; then tail -n 100 "$build/pass-$seed.log" >> "$summary"; exit 1; fi
+            if ! python3 "$build/report.py" "$seed" "$build/pass-$seed.xml" "$rc" | tee -a "$summary"; then tail -n 100 "$build/pass-$seed.log" | tee -a "$summary"; exit 1; fi
           done
 
       - name: Remove owned sandbox
@@ -148,4 +151,3 @@ jobs:
                   raise SystemExit('Refusing to remove an unowned or out-of-workspace sandbox')
               shutil.rmtree(resolved)
           PY
-
