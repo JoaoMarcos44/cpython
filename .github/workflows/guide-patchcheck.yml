@@ -54,7 +54,7 @@ jobs:
           [ -z "$(git -C "$source" status --porcelain)" ]
           git -C "$source" fetch --no-tags --filter=blob:none --depth=1 origin "$BASE_COMMIT"
           git -C "$source" remote add upstream https://github.com/python/cpython.git
-          git -C "$source" fetch --no-tags --filter=blob:none --depth=1 upstream +refs/heads/main:refs/remotes/upstream/main
+          git -C "$source" fetch --no-tags --depth=1 upstream +refs/heads/main:refs/remotes/upstream/main
           upstream="$(git -C "$source" rev-parse upstream/main)"
           { printf '# ChainMap contribution guide patchcheck\n\nFixed source: `%s` (clean).\n\nUpstream main: `%s`.\n\n' "$FIX_COMMIT" "$upstream";
             printf 'Changes from PR base `%s`:\n\n```text\n' "$BASE_COMMIT";
@@ -71,6 +71,7 @@ jobs:
           printf 'make -j2 exit: %s\n' "$rc" | tee -a "$summary"
           if [ "$rc" -ne 0 ]; then tail -n 100 "$build/make.log" | tee -a "$summary"; exit "$rc"; fi
           ./python -c 'import sys, sysconfig; print("Built Python:", sys.version); assert not sysconfig.get_config_var("Py_DEBUG")' | tee -a "$summary"
+          ./python -c 'import os, runpy, subprocess, sysconfig; p=runpy.run_path(os.environ["SANDBOX"]+"/source/Tools/patchcheck/patchcheck.py"); s=p["SRCDIR"]; r=subprocess.check_output(["git", "remote", "-v"], cwd=s, encoding="UTF-8"); print("Patchcheck cwd:", os.getcwd(), "\nsubprocess cwd:", repr(s), "\nsysconfig abs_srcdir:", repr(sysconfig.get_config_var("abs_srcdir")), "\ngit remote -v repr:", repr(r)); assert os.path.samefile(s, os.environ["SANDBOX"]+"/source"); assert p["get_git_upstream_remote"]()=="upstream"' | tee -a "$summary"
           if make patchcheck > "$build/patchcheck.log" 2>&1; then rc=0; else rc=$?; fi
           { printf '\nmake patchcheck exit: %s\n\n```text\n' "$rc"; cat "$build/patchcheck.log"; printf '\n```\n\n'; } | tee -a "$summary"
           if [ -n "$(git -C "$source" status --porcelain)" ]; then
