@@ -1,0 +1,104 @@
+name: ChainMap contribution guide patchcheck
+on:
+  push:
+    branches: [audit-guide-chainmap]
+permissions:
+  contents: read
+env:
+  BASE_COMMIT: '7515b64aa7231e8a8cf5271155829a208d789583'
+  FIX_COMMIT: 'aa591236ad337499fe80e90e6ad28178c81a8367'
+  SANDBOX: ${{ github.workspace }}/.tmp-sandbox-guide
+  TMPDIR: ${{ github.workspace }}/.tmp-sandbox-guide/build/tmp
+  TMP: ${{ github.workspace }}/.tmp-sandbox-guide/build/tmp
+  TEMP: ${{ github.workspace }}/.tmp-sandbox-guide/build/tmp
+  XDG_CACHE_HOME: ${{ github.workspace }}/.tmp-sandbox-guide/build/cache
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONNOUSERSITE: '1'
+  GIT_TERMINAL_PROMPT: '0'
+jobs:
+  patchcheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Prepare sandbox
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          sandbox = workspace / '.tmp-sandbox-guide'
+          if Path(os.environ['SANDBOX']) != sandbox or sandbox.exists() or sandbox.is_symlink():
+              raise SystemExit('Unexpected or already existing sandbox')
+          sandbox.mkdir()
+          (sandbox / '.guide-patchcheck-owner').write_text(os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT'])
+          for name in ('tmp', 'cache'):
+              (sandbox / 'build' / name).mkdir(parents=True)
+          PY
+      - name: Check out fixed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: JoaoMarcos44/cpython
+          ref: ${{ env.FIX_COMMIT }}
+          path: .tmp-sandbox-guide/source
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Build and run patchcheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$SANDBOX/source"
+          build="$SANDBOX/build"
+          summary="$GITHUB_STEP_SUMMARY"
+          [ "$(git -C "$source" rev-parse HEAD)" = "$FIX_COMMIT" ]
+          [ -z "$(git -C "$source" status --porcelain)" ]
+          git -C "$source" fetch --no-tags --filter=blob:none --depth=1 origin "$BASE_COMMIT"
+          git -C "$source" remote add upstream https://github.com/python/cpython.git
+          git -C "$source" fetch --no-tags --filter=blob:none --depth=1 upstream +refs/heads/main:refs/remotes/upstream/main
+          upstream="$(git -C "$source" rev-parse upstream/main)"
+          { printf '# ChainMap contribution guide patchcheck\n\nFixed source: `%s` (clean).\n\nUpstream main: `%s`.\n\n' "$FIX_COMMIT" "$upstream";
+            printf 'Changes from PR base `%s`:\n\n```text\n' "$BASE_COMMIT";
+            git -C "$source" diff --name-status "$BASE_COMMIT" "$FIX_COMMIT";
+            printf '\n```\n\nChanges patchcheck sees against upstream/main:\n\n```text\n';
+            git -C "$source" diff --name-status upstream/main;
+            printf '\n```\n\n'; } | tee -a "$summary"
+          mkdir "$build/cpython"
+          cd "$build/cpython"
+          if "$source/configure" --without-ensurepip > "$build/configure.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'Configure exit: %s\n' "$rc" | tee -a "$summary"
+          if [ "$rc" -ne 0 ]; then tail -n 100 "$build/configure.log" | tee -a "$summary"; exit "$rc"; fi
+          if make -j2 > "$build/make.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'make -j2 exit: %s\n' "$rc" | tee -a "$summary"
+          if [ "$rc" -ne 0 ]; then tail -n 100 "$build/make.log" | tee -a "$summary"; exit "$rc"; fi
+          ./python -c 'import sys, sysconfig; print("Built Python:", sys.version); assert not sysconfig.get_config_var("Py_DEBUG")' | tee -a "$summary"
+          if make patchcheck > "$build/patchcheck.log" 2>&1; then rc=0; else rc=$?; fi
+          { printf '\nmake patchcheck exit: %s\n\n```text\n' "$rc"; cat "$build/patchcheck.log"; printf '\n```\n\n'; } | tee -a "$summary"
+          if [ -n "$(git -C "$source" status --porcelain)" ]; then
+            git -C "$source" status --short | tee -a "$summary"
+            git -C "$source" diff | tee -a "$summary"
+            git -C "$source" restore --source "$FIX_COMMIT" --worktree -- .
+          fi
+          [ -z "$(git -C "$source" status --porcelain)" ]
+          [ "$(git -C "$source" rev-parse HEAD)" = "$FIX_COMMIT" ]
+          if git -C "$source" diff --check "$BASE_COMMIT" "$FIX_COMMIT" > "$build/diff-check.log" 2>&1 && git -C "$source" diff --check >> "$build/diff-check.log" 2>&1; then diff_rc=0; else diff_rc=$?; fi
+          { printf 'git diff --check exit: %s\n\n```text\n' "$diff_rc"; cat "$build/diff-check.log"; printf '\n```\n\nSource remains clean at fixed SHA.\n'; } | tee -a "$summary"
+          [ "$rc" -eq 0 ] && [ "$diff_rc" -eq 0 ]
+      - name: Remove owned sandbox
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          sandbox = workspace / '.tmp-sandbox-guide'
+          if sandbox.is_symlink():
+              raise SystemExit('Refusing to remove a sandbox symlink')
+          if sandbox.exists():
+              resolved = sandbox.resolve(strict=True)
+              owner = os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT']
+              marker = resolved / '.guide-patchcheck-owner'
+              if resolved.parent != workspace or resolved.name != '.tmp-sandbox-guide' or not marker.is_file() or marker.read_text() != owner:
+                  raise SystemExit('Refusing to remove an unowned or out-of-workspace sandbox')
+              shutil.rmtree(resolved)
+          PY
