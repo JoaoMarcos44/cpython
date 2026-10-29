@@ -1,0 +1,151 @@
+name: Exact ChainMap runtime validation
+on:
+  push:
+    branches: [audit-validation-chainmap]
+permissions:
+  contents: read
+env:
+  BASE_COMMIT: '7515b64aa7231e8a8cf5271155829a208d789583'
+  FIX_COMMIT: 'aa591236ad337499fe80e90e6ad28178c81a8367'
+  SANDBOX: ${{ github.workspace }}/.tmp-sandbox-exact
+  TMPDIR: ${{ github.workspace }}/.tmp-sandbox-exact/build/tmp
+  TMP: ${{ github.workspace }}/.tmp-sandbox-exact/build/tmp
+  TEMP: ${{ github.workspace }}/.tmp-sandbox-exact/build/tmp
+  XDG_CACHE_HOME: ${{ github.workspace }}/.tmp-sandbox-exact/build/cache
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONNOUSERSITE: '1'
+jobs:
+  exact-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Prepare sandbox
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          sandbox = workspace / '.tmp-sandbox-exact'
+          if Path(os.environ['SANDBOX']) != sandbox or sandbox.exists() or sandbox.is_symlink():
+              raise SystemExit('Unexpected or already existing sandbox')
+          if not re.fullmatch(r'[0-9a-f]{40}', os.environ['FIX_COMMIT']):
+              raise SystemExit('Replace FIX_COMMIT with the full lowercase fix SHA')
+          sandbox.mkdir()
+          (sandbox / '.exact-runtime-owner').write_text(os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT'])
+          for name in ('tmp', 'cache'):
+              (sandbox / 'build' / name).mkdir(parents=True)
+          PY
+      - name: Check out fixed source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.FIX_COMMIT }}
+          path: .tmp-sandbox-exact/source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Build and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          source="$SANDBOX/source"
+          build="$SANDBOX/build"
+          summary="$GITHUB_STEP_SUMMARY"
+          printf '# Exact ChainMap validation\n\nBaseline `%s`; fixed `%s`.\n\n' "$BASE_COMMIT" "$FIX_COMMIT" >> "$summary"
+          [ "$(git -C "$source" rev-parse HEAD)" = "$FIX_COMMIT" ]
+          [ -z "$(git -C "$source" status --porcelain)" ]
+          git -C "$source" merge-base --is-ancestor "$BASE_COMMIT" "$FIX_COMMIT"
+          git -C "$source" diff --name-only "$BASE_COMMIT" "$FIX_COMMIT" > "$build/changed-files.txt"
+          grep -Fxq 'Lib/collections/__init__.py' "$build/changed-files.txt"
+          { printf 'Changed files:\n\n```text\n'; cat "$build/changed-files.txt"; printf '```\n\n'; } >> "$summary"
+          mkdir "$build/cpython"
+          cd "$build/cpython"
+          if "$source/configure" --without-ensurepip > "$build/configure.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'Configure exit code: %s\n\n' "$rc" >> "$summary"
+          if [ "$rc" -ne 0 ]; then tail -n 100 "$build/configure.log" >> "$summary"; exit "$rc"; fi
+          if make -j2 > "$build/make.log" 2>&1; then rc=0; else rc=$?; fi
+          printf 'make -j2 exit code: %s\n\n' "$rc" >> "$summary"
+          if [ "$rc" -ne 0 ]; then tail -n 100 "$build/make.log" >> "$summary"; exit "$rc"; fi
+
+          cat > "$build/repro.py" <<'PY'
+          import collections, sys
+          from pathlib import Path
+          assert sys.version_info[:2] == (3, 16), sys.version
+          assert Path(sys.executable).resolve() == Path(sys.argv[2]).resolve() / 'python'
+          assert Path(collections.__file__).resolve() == Path(sys.argv[1]).resolve() / 'Lib/collections/__init__.py'
+          chain = collections.ChainMap(collections.Counter(), {'x': 5})
+          lookup, direct, merged = chain['x'], dict(chain), dict({} | chain)
+          print('Runtime:', sys.version, '\nExecutable:', sys.executable, '\nCollections:', collections.__file__, flush=True)
+          print('Lookup:', lookup, 'Direct:', direct, 'Union:', merged, flush=True)
+          assert lookup == 0 and direct == {'x': 0}
+          assert merged == direct, f'expected union {direct!r}, got {merged!r}'
+          PY
+          cat > "$build/report.py" <<'PY'
+          from collections import Counter
+          import sys, xml.etree.ElementTree as ET
+          label, path, rc = sys.argv[1:]
+          modules = ('test_collections', 'test_userdict', 'test_userlist', 'test_userstring', 'test_numeric_tower')
+          try:
+              root = ET.parse(path).getroot()
+              tests, failures, errors = (int(root.attrib[k]) for k in ('tests', 'failures', 'errors'))
+              cases = {case.get('name'): case for case in root.iter('testcase')}
+              skips = len(root.findall('.//testcase/skipped'))
+              counts = Counter(name.split('.')[1] for name in cases if name and name.startswith('test.') and len(name.split('.')) > 1)
+              if label == 'baseline':
+                  expected = {f'test.test_collections.TestChainMap.test_reverse_union_with_{kind}' for kind in ('counter', 'defaultdict')}
+                  valid = int(rc) == 2 and (tests, failures, errors) == (2, 2, 0) and expected <= cases.keys()
+                  valid = valid and all(cases[name].find('failure') is not None and cases[name].find('failure').get('type') == 'AssertionError' for name in expected)
+                  detail = ', '.join(sorted(expected)) if valid else 'baseline regression mismatch'
+              else:
+                  valid = int(rc) == 0 and tests > 0 and failures == errors == 0 and all(counts[name] > 0 for name in modules)
+                  detail = ', '.join(f'{name}={counts[name]}' for name in modules)
+              print(f'| {label} | {rc} | {tests} | {failures} | {errors} | {skips} | {detail} |')
+          except (OSError, ET.ParseError, KeyError, ValueError) as exc:
+              print(f'| {label} | {rc} | unavailable | unavailable | unavailable | unavailable | {type(exc).__name__} |')
+              valid = False
+          if not valid:
+              raise SystemExit(1)
+          PY
+
+          git -C "$source" show "$BASE_COMMIT:Lib/collections/__init__.py" > "$build/baseline-module.py"
+          trap 'git -C "$source" restore --source "$FIX_COMMIT" -- Lib/collections/__init__.py' EXIT
+          cp "$build/baseline-module.py" "$source/Lib/collections/__init__.py"
+          if ./python "$build/repro.py" "$source" "$build/cpython" > "$build/red-repro.log" 2>&1; then rc=0; else rc=$?; fi
+          { printf 'Baseline repro exit: %s\n\n```text\n' "$rc"; cat "$build/red-repro.log"; printf '```\n\n'; } >> "$summary"
+          [ "$rc" -eq 1 ]
+          grep -Fxq "AssertionError: expected union {'x': 0}, got {'x': 5}" "$build/red-repro.log"
+          printf '| Run / seed | Exit | Tests | Failures | Errors | Skips | Details |\n| --- | --- | --- | --- | --- | --- | --- |\n' >> "$summary"
+          if ./python -m test -j1 --timeout 600 --tempdir "$TMPDIR" --junit-xml "$build/red.xml" -m test.test_collections.TestChainMap.test_reverse_union_with_counter -m test.test_collections.TestChainMap.test_reverse_union_with_defaultdict test_collections > "$build/red.log" 2>&1; then rc=0; else rc=$?; fi
+          if ! python3 "$build/report.py" baseline "$build/red.xml" "$rc" >> "$summary"; then tail -n 100 "$build/red.log" >> "$summary"; exit 1; fi
+          git -C "$source" restore --source "$FIX_COMMIT" -- Lib/collections/__init__.py
+          trap - EXIT
+          [ -z "$(git -C "$source" status --porcelain)" ]
+          if ./python "$build/repro.py" "$source" "$build/cpython" > "$build/green-repro.log" 2>&1; then rc=0; else rc=$?; fi
+          { printf '\nFixed repro exit: %s\n\n```text\n' "$rc"; cat "$build/green-repro.log"; printf '```\n\n'; } >> "$summary"
+          [ "$rc" -eq 0 ]
+          printf 'Each pass runs `./python -m test -j2 --timeout 600 --tempdir <sandbox>/build/tmp --junit-xml <sandbox>/build/pass-N.xml test_collections test_userdict test_userlist test_userstring test_numeric_tower` with `PYTHONHASHSEED=N`.\n\n' >> "$summary"
+          printf '| Run / seed | Exit | Tests | Failures | Errors | Skips | Details |\n| --- | --- | --- | --- | --- | --- | --- |\n' >> "$summary"
+          for seed in $(seq 1 10); do
+            if PYTHONHASHSEED="$seed" ./python -m test -j2 --timeout 600 --tempdir "$TMPDIR" --junit-xml "$build/pass-$seed.xml" test_collections test_userdict test_userlist test_userstring test_numeric_tower > "$build/pass-$seed.log" 2>&1; then rc=0; else rc=$?; fi
+            if ! python3 "$build/report.py" "$seed" "$build/pass-$seed.xml" "$rc" >> "$summary"; then tail -n 100 "$build/pass-$seed.log" >> "$summary"; exit 1; fi
+          done
+
+      - name: Remove owned sandbox
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, shutil
+          from pathlib import Path
+          workspace = Path(os.environ['GITHUB_WORKSPACE']).resolve(strict=True)
+          sandbox = workspace / '.tmp-sandbox-exact'
+          if sandbox.is_symlink():
+              raise SystemExit('Refusing to remove a sandbox symlink')
+          if sandbox.exists():
+              resolved = sandbox.resolve(strict=True)
+              owner = os.environ['GITHUB_RUN_ID'] + ':' + os.environ['GITHUB_RUN_ATTEMPT']
+              marker = resolved / '.exact-runtime-owner'
+              if resolved.parent != workspace or resolved.name != '.tmp-sandbox-exact' or not marker.is_file() or marker.read_text() != owner:
+                  raise SystemExit('Refusing to remove an unowned or out-of-workspace sandbox')
+              shutil.rmtree(resolved)
+          PY
+
