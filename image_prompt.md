@@ -1,0 +1,8 @@
+# Native image generation prompt
+
+Style: Victorian engineering engraving. Generated with the native image tool.
+
+```text
+Use case: infographic-diagram. Asset: a conceptual explainer embedded in a CPython GitHub issue and pull request. Create a refined landscape Victorian engineering bookplate infographic: warm ivory parchment, black copperplate engraving, restrained burgundy and brass accents, delicate ornamental border, elegant large readable lettering. Theme: nineteenth-century technical illustration, not fantasy, not a photograph. Title verbatim: 'LET FINISHED WORK GO'. Subtitle verbatim: 'Buffered Pool iterators'. Three well-separated panels connected from left to right, labelled verbatim 'FLOW', 'PROBLEM', 'FIX'. FLOW: show a registry ledger next to a small work queue, a mechanical worker illustration and completed result cards; a single brass permit/token represents a semaphore that limits queued work. Caption verbatim: 'One permit per buffered iterator'. PROBLEM: finished-work cards have moved out but their permit tokens remain recorded in the pool ledger; show a growing stack of old registry cards, not running tasks. Caption verbatim: 'Finished work leaves entries behind'. FIX: remove the completed iterator's registry card while the pool and remaining active work continue; depict the registry as tidy with only an active entry. Caption verbatim: 'Remove the entry at completion'. Explain retention of Python objects, not OS handles or process leaks. The fix drops the registry reference; it does not cancel active work or destroy the pool. Use minimal text, no small print, no statistics, no performance promises, no logos, no watermark. Prioritize conceptual accuracy and readability over decoration.
+```
+
