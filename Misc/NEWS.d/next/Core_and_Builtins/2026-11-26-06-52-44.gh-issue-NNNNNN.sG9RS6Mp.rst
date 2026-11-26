@@ -1,0 +1,5 @@
+The ``namereplace`` error handler no longer replaces some characters of the
+Private Use Area of plane 15 with names of Unicode name aliases or named
+sequences, which :mod:`unicodedata` stores internally at these code points.
+These characters have no name and are now replaced with a ``\U`` escape
+sequence.

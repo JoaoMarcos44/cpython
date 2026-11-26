@@ -1096,7 +1096,10 @@ PyObject *PyCodec_NameReplaceErrors(PyObject *exc)
     Py_ssize_t imax = start, ressize = 0, replsize;
     for (; imax < end; ++imax) {
         Py_UCS4 c = PyUnicode_READ_CHAR(obj, imax);
-        if (ucnhash_capi->getname(c, buffer, sizeof(buffer), 1)) {
+        // Name aliases and named sequences are stored at code points of the
+        // Private Use Area of plane 15, but they are not the names of these
+        // code points: only look up the Name property (with_alias_and_seq=0).
+        if (ucnhash_capi->getname(c, buffer, sizeof(buffer), 0)) {
             // If 'c' is recognized by getname(), the corresponding replacement
             // is '\\' + 'N' + '{' + NAME + '}', i.e. 1 + 1 + 1 + len(NAME) + 1
             // characters. Failures of getname() are ignored by the handler.
@@ -1120,7 +1123,7 @@ PyObject *PyCodec_NameReplaceErrors(PyObject *exc)
     Py_UCS1 *outp = PyUnicode_1BYTE_DATA(res);
     for (Py_ssize_t i = start; i < imax; ++i) {
         Py_UCS4 c = PyUnicode_READ_CHAR(obj, i);
-        if (ucnhash_capi->getname(c, buffer, sizeof(buffer), 1)) {
+        if (ucnhash_capi->getname(c, buffer, sizeof(buffer), 0)) {
             *outp++ = '\\';
             *outp++ = 'N';
             *outp++ = '{';

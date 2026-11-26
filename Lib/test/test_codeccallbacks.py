@@ -625,6 +625,10 @@ class CodecCallbackTest(unittest.TestCase):
                        "HAMZA ABOVE WITH ALEF MAKSURA ISOLATED FORM}"),
             ("\U000e007f", "\\N{CANCEL TAG}"),
             ("\U0010ffff", "\\U0010ffff"),
+            # Private Use Area code points where name aliases and named
+            # sequences are stored internally have no name (gh-NNNNNN)
+            ("\U000f0000", "\\U000f0000"),
+            ("\U000f0200", "\\U000f0200"),
             # Lone surrogates
             ("\ud800", "\\ud800"),
             ("\udfff", "\\udfff"),

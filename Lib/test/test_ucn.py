@@ -188,6 +188,13 @@ class UnicodeNamesTest(unittest.TestCase):
                 unicodedata.name(chr(cp))
             self.assertEqual(str(cm.exception), 'no such name')
 
+    def test_namereplace_in_pua_range(self):
+        # The names stored in the PUA 15 shouldn't leak through the
+        # "namereplace" error handler either (gh-NNNNNN)
+        for cp in range(0xf0000, 0xf1000):
+            self.assertEqual(chr(cp).encode('ascii', 'namereplace'),
+                             b'\\U%08x' % cp)
+
     def test_named_sequences_sample(self):
         # Check a few named sequences.  See #12753.
         sequences = [
