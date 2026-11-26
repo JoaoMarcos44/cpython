@@ -271,8 +271,8 @@ def _make_lazycache_entry(filename, module_globals):
     if not filename or (filename.startswith('<') and filename.endswith('>')):
         return None
 
-    if module_globals is not None and not isinstance(module_globals, dict):
-        raise TypeError(f'module_globals must be a dict, not {type(module_globals).__qualname__}')
+    if module_globals is not None and not isinstance(module_globals, (dict, frozendict)):
+        raise TypeError(f'module_globals must be a dict or a frozendict, not {type(module_globals).__qualname__}')
     if not module_globals or '__name__' not in module_globals:
         return None
 

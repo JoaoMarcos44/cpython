@@ -3390,6 +3390,16 @@ class TestStack(unittest.TestCase):
         s = list(traceback.walk_tb(tb))
         self.assertEqual(len(s), 1)
 
+    def test_walk_tb_frozendict_globals(self):
+        # Frame globals can be a frozendict, see exec() (gh-NNNNNN)
+        code = compile("1/0", TESTFN + ".py", "exec")
+        try:
+            exec(code, frozendict(__builtins__=__builtins__))
+        except Exception as e:
+            tb = e.__traceback__
+        s = traceback.StackSummary.extract(traceback.walk_tb(tb))
+        self.assertEqual(s[-1].filename, TESTFN + ".py")
+
     def test_extract_stack(self):
         s = traceback.StackSummary.extract(traceback.walk_stack(None))
         self.assertIsInstance(s, traceback.StackSummary)

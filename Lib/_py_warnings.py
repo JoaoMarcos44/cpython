@@ -507,7 +507,12 @@ def warn(message, category=None, stacklevel=1, source=None,
         module = globals['__name__']
     else:
         module = "<string>"
-    registry = globals.setdefault("__warningregistry__", {})
+    if isinstance(globals, frozendict):
+        # A frozendict used as globals (see exec() and eval()) cannot store
+        # a new registry: warn without one.
+        registry = globals.get("__warningregistry__")
+    else:
+        registry = globals.setdefault("__warningregistry__", {})
     _wm.warn_explicit(
         message,
         category,

@@ -1,0 +1,9 @@
+Fix :func:`warnings.warn` and warnings emitted from C code raising
+:exc:`TypeError` (:exc:`AttributeError` in the pure Python implementation)
+when the code that triggers the warning runs with a :class:`frozendict` as
+*globals*, for example with :func:`exec` or :func:`eval`.  If the
+:class:`frozendict` has no ``__warningregistry__``, the warning is now
+processed without creating one.  :mod:`linecache` now also accepts a
+:class:`frozendict` as *module_globals*, like the C implementation of
+:func:`warnings.warn_explicit`, which fixes :mod:`traceback` failing with
+:exc:`TypeError` on frames of such code.

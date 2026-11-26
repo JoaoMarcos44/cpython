@@ -220,6 +220,13 @@ class LineCacheTests(unittest.TestCase):
         # globals: this would error if the lazy value wasn't resolved.
         self.assertEqual(lines, linecache.getlines(NONEXISTENT_FILENAME))
 
+    def test_lazycache_frozendict(self):
+        # Module globals can be a frozendict, see exec() (gh-NNNNNN)
+        linecache.clearcache()
+        self.assertEqual(
+            True, linecache.lazycache(NONEXISTENT_FILENAME, frozendict(globals())))
+        self.assertEqual(1, len(linecache.cache[NONEXISTENT_FILENAME]))
+
     def test_lazycache_provide_after_failed_lookup(self):
         linecache.clearcache()
         lines = linecache.getlines(NONEXISTENT_FILENAME, globals())

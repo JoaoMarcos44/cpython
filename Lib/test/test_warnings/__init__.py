@@ -354,6 +354,11 @@ class FilterTests(BaseTest):
                                       module_globals={})
             self.assertEqual(len(w), 2)
 
+            # frozendict module_globals (gh-NNNNNN)
+            self.module.warn_explicit('msg', UserWarning, "filename", 42,
+                                      module_globals=frozendict())
+            self.assertEqual(len(w), 3)
+
     def test_inheritance(self):
         with self.module.catch_warnings() as w:
             self.module.resetwarnings()
@@ -727,6 +732,50 @@ class WarnTests(BaseTest):
             exec(codeobj, {})
         self.assertEqual(w[0].filename, filename)
         self.assertEqual(w[0].module, '<string>')
+
+    def test_exec_frozendict_globals(self):
+        # gh-NNNNNN: exec() and eval() accept a frozendict as globals,
+        # warn() must not try to store __warningregistry__ in it.
+        code = "warnings.warn('hello', UserWarning)"
+        for action in ("always", "default", "module"):
+            with self.subTest(action=action):
+                ns = frozendict(warnings=self.module,
+                                __builtins__=__builtins__)
+                with self.module.catch_warnings(record=True) as w:
+                    self.module.simplefilter(action, category=UserWarning)
+                    exec(code, ns)
+                self.assertEqual(len(w), 1)
+                self.assertEqual(str(w[0].message), 'hello')
+                self.assertEqual(w[0].filename, '<string>')
+                self.assertNotIn('__warningregistry__', ns)
+
+        ns = frozendict(warnings=self.module, __builtins__=__builtins__)
+        with self.module.catch_warnings():
+            self.module.simplefilter("error", category=UserWarning)
+            with self.assertRaisesRegex(UserWarning, 'hello'):
+                eval(code, ns)
+
+        # An existing registry is still used.
+        registry = {}
+        ns = frozendict(warnings=self.module, __builtins__=__builtins__,
+                        __warningregistry__=registry)
+        with self.module.catch_warnings(record=True) as w:
+            self.module.simplefilter("default", category=UserWarning)
+            exec(code, ns)
+            exec(code, ns)
+        self.assertEqual(len(w), 1)
+        self.assertTrue(registry)
+
+        # The globals are also passed to linecache with the filename.
+        filename = os_helper.TESTFN + '.py'
+        codeobj = compile(code, filename, "exec")
+        ns = frozendict(warnings=self.module, __builtins__=__builtins__,
+                        __name__='frozendict_test')
+        with self.module.catch_warnings(record=True) as w:
+            self.module.simplefilter("always", category=UserWarning)
+            exec(codeobj, ns)
+        self.assertEqual(len(w), 1)
+        self.assertEqual(w[0].filename, filename)
 
     def test_warn_explicit_non_ascii_filename(self):
         with self.module.catch_warnings(record=True) as w:

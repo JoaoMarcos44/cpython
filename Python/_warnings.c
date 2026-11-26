@@ -1190,7 +1190,12 @@ setup_context(Py_ssize_t stack_level,
     if (rc < 0) {
         goto handle_error;
     }
-    if (*registry == NULL) {
+    if (*registry == NULL && PyFrozenDict_Check(globals)) {
+        /* A frozendict used as globals (see exec() and eval()) cannot store
+           a new registry: warn without one, as for a None registry. */
+        *registry = Py_NewRef(Py_None);
+    }
+    else if (*registry == NULL) {
         *registry = PyDict_New();
         if (*registry == NULL)
             goto handle_error;
